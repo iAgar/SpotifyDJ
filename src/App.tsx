@@ -49,7 +49,7 @@ function App() {
   const { deviceId, currentTrack, isReady, player } = usePlayer(token);
   const { energyScore, isActive, videoRef, startCamera, stopCamera } = useMotionDetector();
   const { recommendations, isFetching, fetchRecommendations } = useRecommendations(token);
-  const { nextTrack, isAnalysing, djLog } = useDJBrain({
+  const { nextTrack, isAnalysing, djLog, skipToNext } = useDJBrain({
     token,
     player,
     deviceId,
@@ -131,9 +131,12 @@ function App() {
             {nextTrack.albumArt && (
               <img src={nextTrack.albumArt} alt={nextTrack.name} width={32} height={32} style={{ borderRadius: 4 }} />
             )}
-            <span style={{ fontSize: '0.85rem' }}>
+            <span style={{ fontSize: '0.85rem', flex: 1 }}>
               <strong>{nextTrack.name}</strong> — {nextTrack.artist}
             </span>
+            <button onClick={skipToNext} style={{ flexShrink: 0 }}>
+              Next Song
+            </button>
           </div>
         )}
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getRecommendations, type RecommendedTrack } from '../spotify/useRecommendations';
 import type { CurrentTrack } from '../spotify/usePlayer';
 
@@ -16,6 +16,7 @@ export interface DJBrainState {
   nextTrack: RecommendedTrack | null;
   isAnalysing: boolean;
   djLog: string[];
+  skipToNext: () => Promise<void>;
 }
 
 // ── Helper ───────────────────────────────────────────────────────────────────
@@ -25,143 +26,172 @@ function logEntry(msg: string): string {
   return `[${t}] ${msg}`;
 }
 
+async function postQueue(token: string, deviceId: string, uri: string): Promise<void> {
+  const params = new URLSearchParams({ uri, device_id: deviceId });
+  const res = await fetch(`https://api.spotify.com/v1/me/player/queue?${params}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Queue ${res.status}: ${body}`);
+  }
+}
+
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
-export function useDJBrain({ token, player, deviceId, energyScore }: DJBrainInput): DJBrainState {
+export function useDJBrain({ token, player, deviceId, energyScore, currentTrack }: DJBrainInput): DJBrainState {
   const [nextTrack, setNextTrack]     = useState<RecommendedTrack | null>(null);
   const [isAnalysing, setIsAnalysing] = useState(false);
   const [djLog, setDjLog]             = useState<string[]>([]);
 
-  // Mirror volatile props into refs so event-listener closures always see
-  // current values without the listener needing to be re-registered.
-  const tokenRef       = useRef(token);
-  const deviceIdRef    = useRef(deviceId);
-  const energyRef      = useRef(energyScore);
+  // Mirror volatile props into refs so closures always read current values.
+  const tokenRef        = useRef(token);
+  const deviceIdRef     = useRef(deviceId);
+  const energyRef       = useRef(energyScore);
+  const currentTrackRef = useRef(currentTrack);
 
-  useEffect(() => { tokenRef.current    = token;       }, [token]);
-  useEffect(() => { deviceIdRef.current = deviceId;    }, [deviceId]);
-  useEffect(() => { energyRef.current   = energyScore; }, [energyScore]);
+  useEffect(() => { tokenRef.current       = token;        }, [token]);
+  useEffect(() => { deviceIdRef.current    = deviceId;     }, [deviceId]);
+  useEffect(() => { energyRef.current      = energyScore;  }, [energyScore]);
+  useEffect(() => { currentTrackRef.current = currentTrack; }, [currentTrack]);
 
-  // Per-track state in refs — mutated inside the event listener.
-  const trackIdRef      = useRef<string | null>(null);
-  const pendingRef      = useRef<RecommendedTrack | null>(null);
-  const hasQueuedRef    = useRef(false);
-  const isFetchingRef   = useRef(false);
-
-  // Keep React state for nextTrack in sync with the ref.
-  const setNextTrackBoth = (t: RecommendedTrack | null) => {
-    pendingRef.current = t;
-    setNextTrack(t);
-  };
+  // nextTrack is also kept in a ref so the player_state_changed closure and
+  // skipToNext can read it without stale-closure issues.
+  const nextTrackRef      = useRef<RecommendedTrack | null>(null);
+  const hasQueuedRef      = useRef(false);   // one queue write per track
+  const isFetchingRef     = useRef(false);
+  const trackIdRef        = useRef<string | null>(null);
 
   const pushLog = (msg: string) =>
     setDjLog((prev) => [logEntry(msg), ...prev].slice(0, 50));
 
-  // ── player_state_changed listener ────────────────────────────────────────
-  // Re-registers only when the player instance changes (i.e. once after auth).
+  const setNextTrackBoth = (t: RecommendedTrack | null) => {
+    nextTrackRef.current = t;
+    setNextTrack(t);
+  };
 
+  // ── Reset per-track state when currentTrack.id changes ───────────────────
+  useEffect(() => {
+    const id = currentTrack?.id ?? null;
+    if (id === trackIdRef.current) return;
+    console.log('[useDJBrain] track changed →', currentTrack?.name ?? 'null');
+    trackIdRef.current   = id;
+    hasQueuedRef.current = false;
+    setNextTrackBoth(null);
+    pushLog('Track changed → resetting');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTrack?.id]);
+
+  // ── 15-second interval: refresh nextTrack recommendation ─────────────────
+  useEffect(() => {
+    const fetchNext = async () => {
+      const token        = tokenRef.current;
+      const currentTrack = currentTrackRef.current;
+      const energy       = energyRef.current;
+
+      console.log('[useDJBrain] fetch interval — energy:', energy, 'track:', currentTrack?.name ?? null);
+
+      if (!token || !currentTrack?.id || isFetchingRef.current) return;
+
+      isFetchingRef.current = true;
+      setIsAnalysing(true);
+      try {
+        const picks = await getRecommendations(token, currentTrack.id, energy);
+        console.log('[useDJBrain] picks:', picks.map(t => t.name));
+        if (picks[0]) setNextTrackBoth(picks[0]);
+      } catch (err) {
+        console.error('[useDJBrain] fetch error:', err);
+        pushLog(`Fetch error: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        isFetchingRef.current = false;
+        setIsAnalysing(false);
+      }
+    };
+
+    // Fetch immediately on mount, then every 15 s.
+    fetchNext().catch(console.error);
+    const id = setInterval(() => {
+      fetchNext().catch(console.error);
+    }, 15_000);
+
+    return () => clearInterval(id);
+  }, []); // stable — reads all live values from refs
+
+  // ── player_state_changed: queue at 70% ───────────────────────────────────
   useEffect(() => {
     if (!player) return;
 
     const onStateChanged = (state: Spotify.PlaybackState | null) => {
       if (!state || state.paused) return;
+      if (hasQueuedRef.current) return;
 
       const token    = tokenRef.current;
       const deviceId = deviceIdRef.current;
-      const energy   = energyRef.current;
-
       if (!token || !deviceId) return;
 
       const { position, duration } = state;
-      const trackId = state.track_window.current_track.id;
-      const pct     = duration > 0 ? position / duration : 0;
+      const pct = duration > 0 ? position / duration : 0;
 
-      console.log(`[useDJBrain] state_changed — track: ${state.track_window.current_track.name} pos=${(position / 1000).toFixed(1)}s dur=${(duration / 1000).toFixed(1)}s pct=${(pct * 100).toFixed(1)}%`);
+      console.log(`[useDJBrain] state_changed pct=${(pct * 100).toFixed(1)}% track=${state.track_window.current_track.name}`);
 
-      // ── Track change → reset ────────────────────────────────────────────
-      if (trackId !== trackIdRef.current) {
-        console.log('[useDJBrain] track changed →', state.track_window.current_track.name);
-        trackIdRef.current   = trackId;
-        hasQueuedRef.current = false;
-        isFetchingRef.current = false;
-        setNextTrackBoth(null);
-        pushLog(`Track changed → resetting`);
-      }
+      if (pct < 0.70) return;
 
-      // ── Already queued this track — nothing left to do ──────────────────
-      if (hasQueuedRef.current) return;
-
-      // ── 0–70%: fetch and store recommendation (no queue write) ──────────
-      if (pct < 0.70) {
-        if (!pendingRef.current && !isFetchingRef.current) {
-          isFetchingRef.current = true;
-          setIsAnalysing(true);
-          pushLog('Monitoring energy...');
-          console.log('[useDJBrain] fetching recommendation for energy:', energy);
-
-          getRecommendations(token, trackId ?? '', energy)
-            .then((picks) => {
-              console.log('[useDJBrain] picks:', picks.map(t => t.name));
-              const pick = picks[0];
-              if (pick) {
-                setNextTrackBoth(pick);
-                console.log('[useDJBrain] pending set to:', pick.name);
-              }
-            })
-            .catch((err) => {
-              console.error('[useDJBrain] fetch error:', err);
-              pushLog(`Fetch error: ${err instanceof Error ? err.message : String(err)}`);
-            })
-            .finally(() => {
-              isFetchingRef.current = false;
-              setIsAnalysing(false);
-            });
-        }
-        return;
-      }
-
-      // ── At 70%: queue the pending track exactly once ─────────────────────
-      const candidate = pendingRef.current;
+      const candidate = nextTrackRef.current;
       if (!candidate) {
-        console.log('[useDJBrain] at 70% but no pending track yet — skipping');
+        console.log('[useDJBrain] at 70% but nextTrack not ready yet');
         return;
       }
 
-      hasQueuedRef.current = true; // set immediately to prevent double-fire
+      hasQueuedRef.current = true; // prevent double-fire before async resolves
 
-      console.log('[useDJBrain] at 70%, queuing:', candidate.name, candidate.uri);
-
-      const params = new URLSearchParams({ uri: candidate.uri, device_id: deviceId });
-      fetch(`https://api.spotify.com/v1/me/player/queue?${params}`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      })
-        .then(async (res) => {
-          console.log('[useDJBrain] queue response:', res.status);
-          if (!res.ok) {
-            const body = await res.text();
-            console.error('[useDJBrain] queue failed:', res.status, body);
-            pushLog(`Queue failed ${res.status}: ${body}`);
-            hasQueuedRef.current = false; // allow retry
-          } else {
-            pushLog(`Queued "${candidate.name}" at 70%`);
-          }
+      console.log('[useDJBrain] queuing at 70%:', candidate.name);
+      postQueue(token, deviceId, candidate.uri)
+        .then(() => {
+          console.log('[useDJBrain] queued successfully:', candidate.name);
+          pushLog(`Queued "${candidate.name}" at 70%`);
         })
         .catch((err) => {
           console.error('[useDJBrain] queue error:', err);
           pushLog(`Queue error: ${err instanceof Error ? err.message : String(err)}`);
-          hasQueuedRef.current = false; // allow retry
+          hasQueuedRef.current = false; // allow retry on next event
         });
     };
 
     player.addListener('player_state_changed', onStateChanged);
     console.log('[useDJBrain] player_state_changed listener registered');
-
     return () => {
       player.removeListener('player_state_changed', onStateChanged);
-      console.log('[useDJBrain] player_state_changed listener removed');
     };
-  }, [player]); // re-register only if player instance changes
+  }, [player]);
 
-  return { nextTrack, isAnalysing, djLog };
+  // ── skipToNext: queue current nextTrack then skip ─────────────────────────
+  const skipToNext = useCallback(async () => {
+    const token     = tokenRef.current;
+    const deviceId  = deviceIdRef.current;
+    const candidate = nextTrackRef.current;
+
+    if (!token || !deviceId || !player) {
+      console.log('[useDJBrain] skipToNext — missing token/deviceId/player');
+      return;
+    }
+
+    if (candidate && !hasQueuedRef.current) {
+      hasQueuedRef.current = true;
+      console.log('[useDJBrain] skipToNext queuing:', candidate.name);
+      try {
+        await postQueue(token, deviceId, candidate.uri);
+        pushLog(`Skipped to "${candidate.name}"`);
+      } catch (err) {
+        console.error('[useDJBrain] skipToNext queue error:', err);
+        pushLog(`Skip queue error: ${err instanceof Error ? err.message : String(err)}`);
+        hasQueuedRef.current = false;
+      }
+    }
+
+    await player.nextTrack();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [player]);
+
+  return { nextTrack, isAnalysing, djLog, skipToNext };
 }
