@@ -1,8 +1,6 @@
-import { useEffect } from 'react';
 import { useAuth } from './auth/useAuth';
 import { usePlayer } from './spotify/usePlayer';
 import { useMotionDetector } from './camera/useMotionDetector';
-import { useRecommendations, getRecommendations } from './spotify/useRecommendations';
 import { useDJBrain } from './dj/useDJBrain';
 
 function energyLabel(score: number): string {
@@ -17,47 +15,17 @@ function energyColor(score: number): string {
   return '#f87171';
 }
 
-// ---------------------------------------------------------------------------
-// Smoke-test: runs once on first valid token, logs recommendations to console.
-// ---------------------------------------------------------------------------
-const TEST_TRACK_ID = '1pKYYY0dkg23sQQXi0Q5zN'; // Around The World – Daft Punk
-const TEST_ENERGY   = 0.75;
-
-function useSmokeTest(token: string | null) {
-  useEffect(() => {
-    if (!token) return;
-    console.group('[SmokeTest] getRecommendations');
-    console.log('trackId:', TEST_TRACK_ID, '| energyScore:', TEST_ENERGY);
-    getRecommendations(token, TEST_TRACK_ID, TEST_ENERGY)
-      .then((tracks) => {
-        console.log('Recommended tracks:');
-        tracks.forEach((t, i) =>
-          console.log(`  ${i + 1}. ${t.name} — ${t.artist}  (${t.uri})`),
-        );
-        console.groupEnd();
-      })
-      .catch((err) => {
-        console.error('[SmokeTest] failed:', err);
-        console.groupEnd();
-      });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
-}
-
 function App() {
-  const { token, login }   = useAuth();
+  const { token, login } = useAuth();
   const { deviceId, currentTrack, isReady, player } = usePlayer(token);
   const { energyScore, isActive, videoRef, startCamera, stopCamera } = useMotionDetector();
-  const { recommendations, isFetching, fetchRecommendations } = useRecommendations(token);
-  const { nextTrack, isAnalysing, djLog, skipToNext } = useDJBrain({
+  const { recommendedNext, djLog, playNext } = useDJBrain({
     token,
     player,
     deviceId,
     energyScore,
     currentTrack,
   });
-
-  useSmokeTest(token);
 
   if (!token) {
     return (
@@ -116,77 +84,48 @@ function App() {
         </div>
       </div>
 
-      {/* DJ Brain */}
+      {/* Next Up */}
       <div style={{ marginTop: '1.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-          <strong>DJ Brain</strong>
-          {isAnalysing && (
-            <span style={{ fontSize: '0.8rem', color: '#888' }}>analysing…</span>
-          )}
-        </div>
+        <strong>Next Up</strong>
 
-        {nextTrack && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem' }}>
-            <span style={{ fontSize: '0.8rem', color: '#555' }}>Up next:</span>
-            {nextTrack.albumArt && (
-              <img src={nextTrack.albumArt} alt={nextTrack.name} width={32} height={32} style={{ borderRadius: 4 }} />
+        {recommendedNext ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginTop: '0.5rem' }}>
+            {recommendedNext.albumArt && (
+              <img
+                src={recommendedNext.albumArt}
+                alt={recommendedNext.name}
+                width={40}
+                height={40}
+                style={{ borderRadius: 4, flexShrink: 0 }}
+              />
             )}
             <span style={{ fontSize: '0.85rem', flex: 1 }}>
-              <strong>{nextTrack.name}</strong> — {nextTrack.artist}
+              <strong>{recommendedNext.name}</strong> — {recommendedNext.artist}
             </span>
-            <button onClick={skipToNext} style={{ flexShrink: 0 }}>
+            <button onClick={playNext} style={{ flexShrink: 0 }}>
               Next Song
             </button>
           </div>
+        ) : (
+          <p style={{ fontSize: '0.85rem', color: '#888', marginTop: '0.4rem' }}>
+            {currentTrack ? 'Fetching recommendation…' : 'Play a track to get recommendations.'}
+          </p>
         )}
+      </div>
 
-        {djLog.length > 0 && (
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-            {djLog.slice(0, 8).map((entry, i) => (
+      {/* DJ Log */}
+      {djLog.length > 0 && (
+        <div style={{ marginTop: '1.5rem' }}>
+          <strong>DJ Log</strong>
+          <ul style={{ listStyle: 'none', padding: 0, margin: '0.4rem 0 0', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+            {djLog.map((entry, i) => (
               <li key={i} style={{ fontSize: '0.75rem', color: '#555', fontFamily: 'monospace' }}>
                 {entry}
               </li>
             ))}
           </ul>
-        )}
-      </div>
-
-      {/* Manual Recommendations */}
-      <div style={{ marginTop: '1.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
-          <strong>Recommendations</strong>
-          <button
-            onClick={() => {
-              const trackId = currentTrack?.id;
-              if (trackId) fetchRecommendations(trackId, energyScore);
-            }}
-            disabled={isFetching || !currentTrack?.id}
-          >
-            {isFetching ? 'Fetching…' : 'Refresh'}
-          </button>
         </div>
-
-        {recommendations.length === 0 && !isFetching && (
-          <p style={{ fontSize: '0.85rem', color: '#888' }}>
-            {currentTrack?.id
-              ? 'Hit Refresh to get track suggestions.'
-              : 'Play a track first, then hit Refresh.'}
-          </p>
-        )}
-
-        <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          {recommendations.map((t) => (
-            <li key={t.uri} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-              {t.albumArt && (
-                <img src={t.albumArt} alt={t.name} width={40} height={40} style={{ borderRadius: 4, flexShrink: 0 }} />
-              )}
-              <span style={{ fontSize: '0.85rem' }}>
-                <strong>{t.name}</strong> — {t.artist}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </div>
+      )}
 
       {/* Webcam preview — bottom-right corner */}
       <div
