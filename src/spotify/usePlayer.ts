@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 export interface CurrentTrack {
+  id: string | null;
   name: string;
   artist: string;
 }
@@ -66,6 +67,7 @@ export function usePlayer(token: string | null): UsePlayerResult {
         if (cancelled || !state) return;
         const track = state.track_window.current_track;
         setCurrentTrack({
+          id: track.id,
           name: track.name,
           artist: track.artists.map((a) => a.name).join(', '),
         });
