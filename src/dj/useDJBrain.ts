@@ -94,10 +94,13 @@ export function useDJBrain({ token, player, deviceId, energyScore, currentTrack 
 
       const trackId = state.track_window.current_track.id;
 
-      // Track changed → reset.
+      // Track changed → reset and return. Do not evaluate the 99% check on
+      // the same event that triggered the reset — the position/duration values
+      // on this event may still reflect the previous track's end state.
       if (trackId !== currentTrackIdRef.current) {
         currentTrackIdRef.current = trackId;
         hasQueuedRef.current = false;
+        return;
       }
 
       // Queue at 99%.
