@@ -3,6 +3,7 @@ import { useAuth } from './auth/useAuth';
 import { usePlayer } from './spotify/usePlayer';
 import { useMotionDetector } from './camera/useMotionDetector';
 import { useRecommendations, getRecommendations } from './spotify/useRecommendations';
+import { useDJBrain } from './dj/useDJBrain';
 
 function energyLabel(score: number): string {
   if (score < 0.3) return 'chill';
@@ -17,9 +18,7 @@ function energyColor(score: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Hardcoded smoke-test: runs once when the app mounts with a valid token.
-// Uses a well-known track (Daft Punk – Around The World) and energy 0.75
-// so the result is deterministic enough to inspect in the console.
+// Smoke-test: runs once on first valid token, logs recommendations to console.
 // ---------------------------------------------------------------------------
 const TEST_TRACK_ID = '1pKYYY0dkg23sQQXi0Q5zN'; // Around The World – Daft Punk
 const TEST_ENERGY   = 0.75;
@@ -42,14 +41,21 @@ function useSmokeTest(token: string | null) {
         console.groupEnd();
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]); // intentionally fires only when token becomes available
+  }, [token]);
 }
 
 function App() {
-  const { token, login } = useAuth();
-  const { deviceId, currentTrack, isReady } = usePlayer(token);
+  const { token, login }   = useAuth();
+  const { deviceId, currentTrack, isReady, player } = usePlayer(token);
   const { energyScore, isActive, videoRef, startCamera, stopCamera } = useMotionDetector();
   const { recommendations, isFetching, fetchRecommendations } = useRecommendations(token);
+  const { nextTrack, isAnalysing, djLog } = useDJBrain({
+    token,
+    player,
+    deviceId,
+    energyScore,
+    currentTrack,
+  });
 
   useSmokeTest(token);
 
@@ -110,7 +116,39 @@ function App() {
         </div>
       </div>
 
-      {/* Recommendations */}
+      {/* DJ Brain */}
+      <div style={{ marginTop: '1.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+          <strong>DJ Brain</strong>
+          {isAnalysing && (
+            <span style={{ fontSize: '0.8rem', color: '#888' }}>analysing…</span>
+          )}
+        </div>
+
+        {nextTrack && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.75rem' }}>
+            <span style={{ fontSize: '0.8rem', color: '#555' }}>Up next:</span>
+            {nextTrack.albumArt && (
+              <img src={nextTrack.albumArt} alt={nextTrack.name} width={32} height={32} style={{ borderRadius: 4 }} />
+            )}
+            <span style={{ fontSize: '0.85rem' }}>
+              <strong>{nextTrack.name}</strong> — {nextTrack.artist}
+            </span>
+          </div>
+        )}
+
+        {djLog.length > 0 && (
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+            {djLog.slice(0, 8).map((entry, i) => (
+              <li key={i} style={{ fontSize: '0.75rem', color: '#555', fontFamily: 'monospace' }}>
+                {entry}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Manual Recommendations */}
       <div style={{ marginTop: '1.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
           <strong>Recommendations</strong>
@@ -135,18 +173,9 @@ function App() {
 
         <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {recommendations.map((t) => (
-            <li
-              key={t.uri}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}
-            >
+            <li key={t.uri} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
               {t.albumArt && (
-                <img
-                  src={t.albumArt}
-                  alt={t.name}
-                  width={40}
-                  height={40}
-                  style={{ borderRadius: 4, flexShrink: 0 }}
-                />
+                <img src={t.albumArt} alt={t.name} width={40} height={40} style={{ borderRadius: 4, flexShrink: 0 }} />
               )}
               <span style={{ fontSize: '0.85rem' }}>
                 <strong>{t.name}</strong> — {t.artist}
