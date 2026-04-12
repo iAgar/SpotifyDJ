@@ -45,7 +45,7 @@ export async function login(): Promise<void> {
   window.location.href = `https://accounts.spotify.com/authorize?${params}`;
 }
 
-export async function getToken(code: string): Promise<string> {
+export async function getToken(code: string): Promise<{ accessToken: string; expiresIn: number }> {
   const codeVerifier = localStorage.getItem('pkce_code_verifier');
   if (!codeVerifier) throw new Error('No code verifier found in localStorage');
 
@@ -66,7 +66,7 @@ export async function getToken(code: string): Promise<string> {
     throw new Error(`Token exchange failed: ${error}`);
   }
 
-  const data = await response.json();
+  const data = await response.json() as { access_token: string; expires_in: number };
   localStorage.removeItem('pkce_code_verifier');
-  return data.access_token as string;
+  return { accessToken: data.access_token, expiresIn: data.expires_in ?? 3600 };
 }
