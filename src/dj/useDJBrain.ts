@@ -4,11 +4,12 @@ import type { CurrentTrack } from '../spotify/usePlayer';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const POLL_INTERVAL_MS   = 10_000; // check playback state every 10 s
-const QUEUE_AT_PCT       = 0.85;   // queue the pending track at 85% of duration
-const NO_INTERRUPT_SEC   = 30;     // never act in the first 30 s of a track
-const ENERGY_RETRIGGER   = 0.30;   // re-fetch recommendation if energy shifts this much
-const QUEUE_COOLDOWN_MS  = 30_000; // never queue again within 30 s of the last queue
+const POLL_INTERVAL_MS = 10_000; // how often the tick runs
+const FIRST_REC_SEC    = 20;     // fetch + queue first recommendation at 20 s
+const REEVAL_SEC       = 15;     // re-evaluate energy every 15 s after first queue
+const ENERGY_RETRIGGER = 0.20;   // re-queue if energy shifts more than this
+const SKIP_AT_PCT      = 0.85;   // call player.nextTrack() at 85% of duration
+const SKIP_FALLBACK_SEC = 180;   // fallback skip after 3 min if duration unavailable
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -66,8 +67,7 @@ export function useDJBrain({
   const [isAnalysing, setIsAnalysing] = useState(false);
   const [djLog, setDjLog]             = useState<string[]>([]);
 
-  // Mirror all props into refs so the stable interval closure always reads
-  // current values without being recreated on every render.
+  // Mirror all props into refs so the stable interval closure reads fresh values.
   const tokenRef        = useRef(token);
   const playerRef       = useRef(player);
   const deviceIdRef     = useRef(deviceId);
@@ -82,31 +82,18 @@ export function useDJBrain({
 
   // ── Persistent loop state ─────────────────────────────────────────────────
 
-  // The recommendation we intend to queue — updated eagerly on energy shifts,
-  // but only written to the Spotify queue at the 85% gate.
-  const pendingTrackRef   = useRef<RecommendedTrack | null>(null);
-
-  // Energy level at the time pendingTrackRef was last fetched.
-  const energyAtFetch     = useRef<number | null>(null);
-
-  // Whether we've already written pendingTrackRef to the queue this track.
-  const hasQueuedThisTrack = useRef(false);
-
-  // Wall-clock time of the last successful addToQueue call (ms).
-  const lastQueuedAt      = useRef<number>(0);
-
-  // Last queued URI — skip if candidate matches this (prevents same-track repeat).
-  const lastQueuedUri     = useRef<string | null>(null);
-
-  // Track ID we last processed — used to detect track changes.
-  const trackIdRef        = useRef<string | null | undefined>(null);
-
-  const isFetchingRef     = useRef(false);
+  const trackIdRef          = useRef<string | null | undefined>(null);
+  const hasQueuedThisTrack  = useRef(false);   // true after first queue this track
+  const hasSkippedThisTrack = useRef(false);   // true after nextTrack() called
+  const lastQueuedUri       = useRef<string | null>(null);
+  const energyAtLastQueue   = useRef<number | null>(null);
+  const lastEvalAt          = useRef<number>(0); // wall-clock ms of last queue/re-eval
+  const isFetchingRef       = useRef(false);
 
   const pushLog = (msg: string) =>
     setDjLog((prev) => [logEntry(msg), ...prev].slice(0, 50));
 
-  // ── 10-second polling interval ────────────────────────────────────────────
+  // ── Stable interval ───────────────────────────────────────────────────────
 
   useEffect(() => {
     console.log('[useDJBrain] interval effect mounting');
@@ -125,113 +112,108 @@ export function useDJBrain({
         return;
       }
 
-      // ── Detect track change and reset per-track state ────────────────────
+      // ── Reset state on track change ───────────────────────────────────────
       if (currentTrack.id !== trackIdRef.current) {
-        console.log('[useDJBrain] new track detected:', currentTrack.name);
-        trackIdRef.current       = currentTrack.id;
-        hasQueuedThisTrack.current = false;
-        pendingTrackRef.current  = null;
-        energyAtFetch.current    = null;
+        console.log('[useDJBrain] new track:', currentTrack.name);
+        trackIdRef.current          = currentTrack.id;
+        hasQueuedThisTrack.current  = false;
+        hasSkippedThisTrack.current = false;
+        energyAtLastQueue.current   = null;
+        lastEvalAt.current          = 0;
         setNextTrack(null);
       }
 
-      // ── Get live playback position ────────────────────────────────────────
+      // ── Live playback position ────────────────────────────────────────────
       const state = await player.getCurrentState();
-      console.log('[useDJBrain] playback state:', state
+      console.log('[useDJBrain] state:', state
         ? `pos=${state.position} dur=${state.duration} paused=${state.paused}`
         : 'null');
 
       if (!state || state.paused) return;
 
       const { position, duration } = state;
-      const positionSec = position / 1000;
-      const pct = duration > 0 ? position / duration : 0;
+      const positionSec  = position / 1000;
+      const durationSec  = duration / 1000;
+      const pct          = duration > 0 ? position / duration : 0;
+      const durationKnown = duration > 0;
 
-      // Fallback: if duration is 0 or unavailable, treat 45s of play as the queue trigger.
-      const durationUnavailable = duration === 0;
-      const fallbackQueueSec    = 45;
+      console.log(`[useDJBrain] pos=${positionSec.toFixed(1)}s dur=${durationSec.toFixed(1)}s pct=${(pct * 100).toFixed(1)}% nextEvalIn=${Math.max(0, (lastEvalAt.current + REEVAL_SEC * 1000) - Date.now()).toFixed(0)}ms`);
 
-      console.log(`[useDJBrain] pos=${positionSec.toFixed(1)}s dur=${(duration / 1000).toFixed(1)}s pct=${(pct * 100).toFixed(1)}% durUnavailable=${durationUnavailable} cooldownRemaining=${Math.max(0, QUEUE_COOLDOWN_MS - (Date.now() - lastQueuedAt.current))}ms`);
-
-      if (positionSec < NO_INTERRUPT_SEC) {
-        console.log('[useDJBrain] within no-interrupt window, skipping');
-        return;
-      }
-
-      // ── Eagerly refresh the pending recommendation when energy shifts ─────
-      // We update pendingTrackRef without touching the queue yet.
+      // ── PHASE 1: first recommendation at 20 s ────────────────────────────
+      // PHASE 2: re-evaluate every 15 s if energy shifted > 0.2
+      const reevalDue = Date.now() - lastEvalAt.current >= REEVAL_SEC * 1000;
       const energyShifted =
-        energyAtFetch.current !== null &&
-        Math.abs(energyScore - energyAtFetch.current) > ENERGY_RETRIGGER;
+        energyAtLastQueue.current !== null &&
+        Math.abs(energyScore - energyAtLastQueue.current) > ENERGY_RETRIGGER;
 
-      const needsFetch = pendingTrackRef.current === null || energyShifted;
+      const shouldFetchAndQueue =
+        !isFetchingRef.current && (
+          // First recommendation: 20 s has elapsed, never queued yet
+          (!hasQueuedThisTrack.current && positionSec >= FIRST_REC_SEC) ||
+          // Re-evaluation: 15 s since last eval AND energy changed
+          (hasQueuedThisTrack.current && reevalDue && energyShifted)
+        );
 
-      if (needsFetch && !isFetchingRef.current) {
+      console.log(`[useDJBrain] shouldFetchAndQueue=${shouldFetchAndQueue} (pos=${positionSec.toFixed(0)}s queued=${hasQueuedThisTrack.current} reevalDue=${reevalDue} shifted=${energyShifted})`);
+
+      if (shouldFetchAndQueue) {
         isFetchingRef.current = true;
         setIsAnalysing(true);
-        console.log('[useDJBrain] fetching recommendation, energy:', energyScore);
+        console.log('[useDJBrain] fetching recommendations, energy:', energyScore);
         try {
           const picks = await getRecommendations(token, currentTrack.id, energyScore);
-          console.log('[useDJBrain] recommendations received:', picks.map((t) => t.name));
+          console.log('[useDJBrain] picks:', picks.map((t) => t.name));
 
           const candidate = picks.find((t) => t.uri !== lastQueuedUri.current) ?? picks[0];
-          if (candidate) {
-            pendingTrackRef.current = candidate;
-            energyAtFetch.current   = energyScore;
-            setNextTrack(candidate);
-
-            if (energyShifted) {
-              const msg = `Energy shifted ${energyLabel(energyScore)} → will queue "${candidate.name}"`;
-              console.log('[useDJBrain]', msg);
-              pushLog(msg);
-            }
+          if (!candidate) {
+            pushLog('No recommendations found');
+            return;
           }
+
+          await addToQueue(token, deviceId, candidate.uri);
+
+          const isFirst = !hasQueuedThisTrack.current;
+
+          lastQueuedUri.current      = candidate.uri;
+          energyAtLastQueue.current  = energyScore;
+          lastEvalAt.current         = Date.now();
+          hasQueuedThisTrack.current = true;
+
+          setNextTrack(candidate);
+
+          const reason = isFirst ? 'First rec' : `Energy ${energyLabel(energyScore)}`;
+          const msg = `${reason} → queued "${candidate.name}" by ${candidate.artist}`;
+          console.log('[useDJBrain]', msg);
+          pushLog(msg);
         } catch (err) {
-          console.error('[useDJBrain] fetch error', err);
-          pushLog(`Fetch error: ${err instanceof Error ? err.message : String(err)}`);
+          console.error('[useDJBrain] fetch/queue error:', err);
+          pushLog(`Error: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
           isFetchingRef.current = false;
           setIsAnalysing(false);
         }
       }
 
-      // ── Queue the pending track at 85% (or 45s fallback) if cooldown elapsed
-      const cooldownElapsed = Date.now() - lastQueuedAt.current >= QUEUE_COOLDOWN_MS;
-      const atQueueThreshold = durationUnavailable
-        ? positionSec >= fallbackQueueSec
-        : pct >= QUEUE_AT_PCT;
+      // ── PHASE 3: skip at 85% (or fallback after SKIP_FALLBACK_SEC) ───────
+      const atSkipThreshold = durationKnown
+        ? pct >= SKIP_AT_PCT
+        : positionSec >= SKIP_FALLBACK_SEC;
 
-      if (
-        atQueueThreshold &&
-        !hasQueuedThisTrack.current &&
-        cooldownElapsed &&
-        pendingTrackRef.current
-      ) {
-        const candidate = pendingTrackRef.current;
-        console.log('[useDJBrain] queuing at 85%:', candidate.name);
-
-        try {
-          await addToQueue(token, deviceId, candidate.uri);
-
-          lastQueuedUri.current      = candidate.uri;
-          lastQueuedAt.current       = Date.now();
-          hasQueuedThisTrack.current = true;
-
-          const msg = `Energy ${energyLabel(energyScore)} → queued "${candidate.name}" by ${candidate.artist}`;
-          console.log('[useDJBrain]', msg);
-          pushLog(msg);
-        } catch (err) {
-          console.error('[useDJBrain] queue error', err);
-          pushLog(`Queue error: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      } else if (atQueueThreshold) {
-        console.log(`[useDJBrain] at threshold but not queuing — queued=${hasQueuedThisTrack.current} cooldownOk=${cooldownElapsed} pending=${!!pendingTrackRef.current}`);
+      if (atSkipThreshold && !hasSkippedThisTrack.current) {
+        hasSkippedThisTrack.current = true;
+        const nextName = (await player.getCurrentState())?.track_window.next_tracks[0]?.name;
+        const msg = nextName
+          ? `85% reached → skipping to "${nextName}"`
+          : '85% reached → skipping to next track';
+        console.log('[useDJBrain]', msg);
+        pushLog(msg);
+        await player.nextTrack();
       }
     };
 
     const id = setInterval(() => {
       console.log('[useDJBrain] interval fired');
-      tick().catch((err) => console.error('[useDJBrain] tick error', err));
+      tick().catch((err) => console.error('[useDJBrain] tick error:', err));
     }, POLL_INTERVAL_MS);
 
     console.log('[useDJBrain] interval registered, id:', id);
