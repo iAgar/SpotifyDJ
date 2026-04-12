@@ -11,6 +11,8 @@ export interface UsePlayerResult {
   deviceId: string | null;
   currentTrack: CurrentTrack | null;
   isReady: boolean;
+  isReconnecting: boolean;
+  isPremiumError: boolean;
   player: Spotify.Player | null;
 }
 
@@ -32,10 +34,12 @@ function loadSpotifySDK(): Promise<void> {
   });
 }
 
-export function usePlayer(token: string | null): UsePlayerResult {
-  const [deviceId, setDeviceId] = useState<string | null>(null);
-  const [currentTrack, setCurrentTrack] = useState<CurrentTrack | null>(null);
-  const [isReady, setIsReady] = useState(false);
+export function usePlayer(token: string | null, onAuthError?: () => void): UsePlayerResult {
+  const [deviceId, setDeviceId]           = useState<string | null>(null);
+  const [currentTrack, setCurrentTrack]   = useState<CurrentTrack | null>(null);
+  const [isReady, setIsReady]             = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
+  const [isPremiumError, setIsPremiumError] = useState(false);
   const playerRef = useRef<Spotify.Player | null>(null);
 
   useEffect(() => {
@@ -56,12 +60,15 @@ export function usePlayer(token: string | null): UsePlayerResult {
         if (cancelled) return;
         setDeviceId(device_id);
         setIsReady(true);
+        setIsReconnecting(false);
+        console.log('[Player] Ready, device_id:', device_id);
       });
 
-      player.addListener('not_ready', () => {
+      player.addListener('not_ready', ({ device_id }) => {
         if (cancelled) return;
+        console.warn('[Player] Device went offline:', device_id);
         setIsReady(false);
-        setDeviceId(null);
+        setIsReconnecting(true);
       });
 
       player.addListener('player_state_changed', (state) => {
@@ -81,10 +88,13 @@ export function usePlayer(token: string | null): UsePlayerResult {
 
       player.addListener('authentication_error', ({ message }) => {
         console.error('[Spotify] authentication_error:', message);
+        // Token rejected by SDK — clear auth and redirect to login
+        onAuthError?.();
       });
 
       player.addListener('account_error', ({ message }) => {
         console.error('[Spotify] account_error:', message);
+        setIsPremiumError(true);
       });
 
       player.connect();
@@ -96,10 +106,11 @@ export function usePlayer(token: string | null): UsePlayerResult {
       playerRef.current?.disconnect();
       playerRef.current = null;
       setIsReady(false);
+      setIsReconnecting(false);
       setDeviceId(null);
       setCurrentTrack(null);
     };
-  }, [token]);
+  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { deviceId, currentTrack, isReady, player: playerRef.current };
+  return { deviceId, currentTrack, isReady, isReconnecting, isPremiumError, player: playerRef.current };
 }

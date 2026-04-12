@@ -4,8 +4,6 @@ const SAMPLE_INTERVAL_MS = 500;
 const ROLLING_WINDOW = 5;
 
 // Compare two RGBA pixel arrays and return a normalised diff score 0.0–1.0.
-// We sample every 4th pixel (one per RGBA group) using just the luma
-// approximation (0.299R + 0.587G + 0.114B) to keep it cheap.
 function computeDiff(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
   let totalDiff = 0;
   const pixelCount = a.length / 4;
@@ -16,9 +14,6 @@ function computeDiff(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
     totalDiff += Math.abs(lumaA - lumaB);
   }
 
-  // Max possible diff per pixel is 255; normalise to 0–1.
-  // Empirically, real crowd motion rarely exceeds ~30% average pixel change,
-  // so we cap at 60 (not 255) to spread the useful range across 0–1.
   const avgDiff = totalDiff / pixelCount;
   return Math.min(avgDiff / 60, 1.0);
 }
@@ -31,6 +26,7 @@ function rollingAverage(window: number[]): number {
 export interface UseMotionDetectorResult {
   energyScore: number;
   isActive: boolean;
+  cameraError: string | null;
   videoRef: React.RefObject<HTMLVideoElement | null>;
   startCamera: () => Promise<void>;
   stopCamera: () => void;
@@ -38,16 +34,16 @@ export interface UseMotionDetectorResult {
 
 export function useMotionDetector(): UseMotionDetectorResult {
   const [energyScore, setEnergyScore] = useState(0);
-  const [isActive, setIsActive] = useState(false);
+  const [isActive, setIsActive]       = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
 
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const prevFrameRef = useRef<Uint8ClampedArray | null>(null);
-  const rollingRef = useRef<number[]>([]);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const videoRef      = useRef<HTMLVideoElement | null>(null);
+  const streamRef     = useRef<MediaStream | null>(null);
+  const canvasRef     = useRef<HTMLCanvasElement | null>(null);
+  const prevFrameRef  = useRef<Uint8ClampedArray | null>(null);
+  const rollingRef    = useRef<number[]>([]);
+  const intervalRef   = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Lazily create the off-screen canvas once.
   function getCanvas(): HTMLCanvasElement {
     if (!canvasRef.current) {
       canvasRef.current = document.createElement('canvas');
@@ -71,37 +67,52 @@ export function useMotionDetector(): UseMotionDetectorResult {
     if (prevFrameRef.current) {
       const raw = computeDiff(prevFrameRef.current, frame);
 
-      const window = rollingRef.current;
-      window.push(raw);
-      if (window.length > ROLLING_WINDOW) window.shift();
+      const win = rollingRef.current;
+      win.push(raw);
+      if (win.length > ROLLING_WINDOW) win.shift();
 
-      setEnergyScore(rollingAverage(window));
+      setEnergyScore(rollingAverage(win));
     }
 
     prevFrameRef.current = new Uint8ClampedArray(frame);
   }, []);
 
   const startCamera = useCallback(async () => {
-    if (streamRef.current) return; // already running
+    if (streamRef.current) return;
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 160, height: 120, facingMode: 'user' },
-      audio: false,
-    });
+    setCameraError(null);
 
-    streamRef.current = stream;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 160, height: 120, facingMode: 'user' },
+        audio: false,
+      });
 
-    if (videoRef.current) {
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play();
+      streamRef.current = stream;
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+
+      prevFrameRef.current = null;
+      rollingRef.current = [];
+      setEnergyScore(0);
+      setIsActive(true);
+
+      intervalRef.current = setInterval(sampleFrame, SAMPLE_INTERVAL_MS);
+    } catch (err) {
+      const isDenied =
+        err instanceof DOMException &&
+        (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError');
+
+      if (isDenied) {
+        setCameraError('Camera access needed to read crowd energy. Allow camera access and try again.');
+      } else {
+        setCameraError('Could not start camera. Please check your device and try again.');
+      }
+      console.error('[Camera] getUserMedia failed:', err);
     }
-
-    prevFrameRef.current = null;
-    rollingRef.current = [];
-    setEnergyScore(0);
-    setIsActive(true);
-
-    intervalRef.current = setInterval(sampleFrame, SAMPLE_INTERVAL_MS);
   }, [sampleFrame]);
 
   const stopCamera = useCallback(() => {
@@ -121,9 +132,9 @@ export function useMotionDetector(): UseMotionDetectorResult {
     rollingRef.current = [];
     setEnergyScore(0);
     setIsActive(false);
+    setCameraError(null);
   }, []);
 
-  // Clean up on unmount.
   useEffect(() => {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
@@ -131,5 +142,5 @@ export function useMotionDetector(): UseMotionDetectorResult {
     };
   }, []);
 
-  return { energyScore, isActive, videoRef, startCamera, stopCamera };
+  return { energyScore, isActive, cameraError, videoRef, startCamera, stopCamera };
 }

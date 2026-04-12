@@ -1,13 +1,14 @@
-import type { CurrentTrack } from '../spotify/usePlayer';
-
 interface Props {
-  track: CurrentTrack | null;
+  trackName: string | null;
+  artistName: string | null;
+  albumArt: string | null;
   isReady: boolean;
 }
 
 const BAR_COUNT = 5;
 
-export function NowPlaying({ track, isReady }: Props) {
+export function NowPlaying({ trackName, artistName, albumArt, isReady }: Props) {
+  console.log('[NowPlaying] albumArt:', albumArt, '| trackName:', trackName);
   return (
     <div style={{
       display: 'flex',
@@ -25,10 +26,10 @@ export function NowPlaying({ track, isReady }: Props) {
         flexShrink: 0,
         boxShadow: '0 8px 40px rgba(0,0,0,0.6)',
       }}>
-        {track?.albumArt ? (
+        {albumArt ? (
           <img
-            src={track.albumArt}
-            alt={track.name}
+            src={albumArt}
+            alt={trackName ?? 'Album art'}
             width={300}
             height={300}
             style={{ display: 'block', objectFit: 'cover' }}
@@ -62,7 +63,7 @@ export function NowPlaying({ track, isReady }: Props) {
           maxWidth: 320,
           margin: '0 auto',
         }}>
-          {track?.name ?? '—'}
+          {trackName ?? '—'}
         </div>
 
         <div style={{
@@ -75,11 +76,11 @@ export function NowPlaying({ track, isReady }: Props) {
           maxWidth: 320,
           margin: '0.35rem auto 0',
         }}>
-          {track?.artist ?? 'No track playing'}
+          {artistName ?? 'No track playing'}
         </div>
 
         {/* Equaliser bars — animate only while a track is playing */}
-        {isReady && track && (
+        {isReady && trackName && (
           <div style={{
             display: 'flex',
             alignItems: 'flex-end',

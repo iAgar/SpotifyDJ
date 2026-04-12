@@ -10,7 +10,7 @@ export function isTokenExpired(): boolean {
   return Date.now() / 1000 >= Number(expiry);
 }
 
-function clearAuth(): void {
+export function clearAuth(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(EXPIRY_KEY);
 }
@@ -32,11 +32,7 @@ export function useAuth() {
     const params = new URLSearchParams(window.location.search);
     const code = params.get('code');
 
-    if (!code) {
-      // No OAuth callback — if we have no valid token, nothing to do here;
-      // the render path will show the login button.
-      return;
-    }
+    if (!code) return;
 
     // Clear the code from the URL immediately so a refresh doesn't re-use it.
     const cleanUrl = window.location.origin + window.location.pathname;
@@ -54,5 +50,10 @@ export function useAuth() {
       });
   }, []);
 
-  return { token, login };
+  function logout(): void {
+    clearAuth();
+    setToken(null);
+  }
+
+  return { token, login, logout };
 }

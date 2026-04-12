@@ -32,6 +32,7 @@ export function CameraPreview({ videoRef, isActive, energyScore }: Props) {
         ref={videoRef}
         width={160}
         height={120}
+        autoPlay
         muted
         playsInline
         style={{
