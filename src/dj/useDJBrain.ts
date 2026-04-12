@@ -21,11 +21,14 @@ function ts(): string {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-async function postQueue(token: string, deviceId: string, uri: string): Promise<void> {
-  const params = new URLSearchParams({ uri, device_id: deviceId });
-  const res = await fetch(`https://api.spotify.com/v1/me/player/queue?${params}`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
+async function playTrack(token: string, deviceId: string, uri: string): Promise<void> {
+  const res = await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ uris: [uri] }),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -38,15 +41,14 @@ export function useDJBrain({ token, player, deviceId, energyScore, currentTrack 
   const [isAnalysing, setIsAnalysing] = useState(false);
   const [djLog, setDjLog] = useState<string[]>([]);
 
-  const hasQueuedRef        = useRef(false);
-  const currentTrackIdRef   = useRef<string | null>(null);
+  const hasPlayedRef      = useRef(false);
+  const currentTrackIdRef = useRef<string | null>(null);
 
-  // Refs so interval and event-listener closures always read current values.
-  const tokenRef      = useRef(token);
-  const deviceIdRef   = useRef(deviceId);
-  const energyRef     = useRef(energyScore);
-  const trackRef      = useRef(currentTrack);
-  const nextTrackRef  = useRef<RecommendedTrack | null>(null);
+  const tokenRef     = useRef(token);
+  const deviceIdRef  = useRef(deviceId);
+  const energyRef    = useRef(energyScore);
+  const trackRef     = useRef(currentTrack);
+  const nextTrackRef = useRef<RecommendedTrack | null>(null);
 
   useEffect(() => { tokenRef.current    = token;        }, [token]);
   useEffect(() => { deviceIdRef.current = deviceId;     }, [deviceId]);
@@ -56,12 +58,12 @@ export function useDJBrain({ token, player, deviceId, energyScore, currentTrack 
   const log = (msg: string) =>
     setDjLog(prev => [`[${ts()}] ${msg}`, ...prev].slice(0, 50));
 
-  // ── Every 15 seconds: fetch recommendation, update nextTrack. That is all. ─
+  // ── Every 15s: fetch recommendation and overwrite recommendedNext ─────────
 
   useEffect(() => {
     const fetch15 = async () => {
-      const token = tokenRef.current;
-      const track = trackRef.current;
+      const token  = tokenRef.current;
+      const track  = trackRef.current;
       const energy = energyRef.current;
       if (!token || !track?.id) return;
 
@@ -84,7 +86,7 @@ export function useDJBrain({ token, player, deviceId, energyScore, currentTrack 
     return () => clearInterval(id);
   }, []);
 
-  // ── Watch player_state_changed ────────────────────────────────────────────
+  // ── player_state_changed: play recommendedNext at 90% ────────────────────
 
   useEffect(() => {
     if (!player) return;
@@ -94,17 +96,15 @@ export function useDJBrain({ token, player, deviceId, energyScore, currentTrack 
 
       const trackId = state.track_window.current_track.id;
 
-      // Track changed → reset.
       if (trackId !== currentTrackIdRef.current) {
         currentTrackIdRef.current = trackId;
-        hasQueuedRef.current = false;
+        hasPlayedRef.current = false;
       }
 
-      // Queue at 99%.
       if (
         state.duration > 0 &&
-        state.position / state.duration > 0.99 &&
-        hasQueuedRef.current === false
+        state.position / state.duration > 0.9 &&
+        hasPlayedRef.current === false
       ) {
         const token     = tokenRef.current;
         const deviceId  = deviceIdRef.current;
@@ -112,13 +112,13 @@ export function useDJBrain({ token, player, deviceId, energyScore, currentTrack 
 
         if (!token || !deviceId || !candidate) return;
 
-        hasQueuedRef.current = true;
+        hasPlayedRef.current = true;
 
-        postQueue(token, deviceId, candidate.uri)
-          .then(() => log(`Queued "${candidate.name}" at 99%`))
+        playTrack(token, deviceId, candidate.uri)
+          .then(() => log(`Playing "${candidate.name}" at 90%`))
           .catch(err => {
-            log(`Queue error: ${err instanceof Error ? err.message : String(err)}`);
-            hasQueuedRef.current = false;
+            log(`Play error: ${err instanceof Error ? err.message : String(err)}`);
+            hasPlayedRef.current = false;
           });
       }
     };
@@ -127,21 +127,19 @@ export function useDJBrain({ token, player, deviceId, energyScore, currentTrack 
     return () => { player.removeListener('player_state_changed', onState); };
   }, [player]);
 
-  // ── Next Song button ──────────────────────────────────────────────────────
+  // ── Next Song button: play recommendedNext immediately ────────────────────
 
   const skipToNext = useCallback(async () => {
     const token     = tokenRef.current;
     const deviceId  = deviceIdRef.current;
     const candidate = nextTrackRef.current;
 
-    if (token && deviceId && candidate) {
-      await postQueue(token, deviceId, candidate.uri);
-      hasQueuedRef.current = true;
-      log(`Skipped to "${candidate.name}"`);
-    }
+    if (!token || !deviceId || !candidate) return;
 
-    await player?.nextTrack();
-  }, [player]);
+    await playTrack(token, deviceId, candidate.uri);
+    hasPlayedRef.current = false;
+    log(`Playing "${candidate.name}" via Next Song`);
+  }, []);
 
   return { nextTrack, isAnalysing, djLog, skipToNext };
 }
