@@ -3,7 +3,6 @@ import { useAuth } from './auth/useAuth';
 import { usePlayer } from './spotify/usePlayer';
 import { useMotionDetector } from './camera/useMotionDetector';
 import { useRecommendations, getRecommendations } from './spotify/useRecommendations';
-import { useTrackFeatures } from './spotify/useTrackFeatures';
 
 function energyLabel(score: number): string {
   if (score < 0.3) return 'chill';
@@ -51,7 +50,6 @@ function App() {
   const { deviceId, currentTrack, isReady } = usePlayer(token);
   const { energyScore, isActive, videoRef, startCamera, stopCamera } = useMotionDetector();
   const { recommendations, isFetching, fetchRecommendations } = useRecommendations(token);
-  const { features } = useTrackFeatures(token, currentTrack?.id ?? null);
 
   useSmokeTest(token);
 
@@ -77,12 +75,6 @@ function App() {
         <p>Now playing: {currentTrack.name} — {currentTrack.artist}</p>
       ) : (
         <p>No track playing</p>
-      )}
-
-      {features && (
-        <p style={{ fontSize: '0.8rem', color: '#555' }}>
-          Track — energy: {features.energy.toFixed(2)} | danceability: {features.danceability.toFixed(2)} | tempo: {Math.round(features.tempo)} BPM
-        </p>
       )}
 
       {deviceId && (

@@ -17,11 +17,6 @@ interface SpotifyTrack {
   album: { images: Array<{ url: string }> };
 }
 
-interface AudioFeatureItem {
-  id: string;
-  energy: number;
-}
-
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 async function spotifyGet<T>(token: string, path: string): Promise<T> {
@@ -55,92 +50,64 @@ async function getArtistTopTracks(token: string, artistId: string): Promise<Spot
   return data.tracks;
 }
 
-/** Fetch up to `limit` related artist IDs. */
-async function getRelatedArtistIds(
-  token: string,
-  artistId: string,
-  limit: number,
-): Promise<string[]> {
-  const data = await spotifyGet<{ artists: Array<{ id: string }> }>(
-    token,
-    `/artists/${artistId}/related-artists`,
-  );
-  return data.artists.slice(0, limit).map((a) => a.id);
-}
-
-/** Fetch audio features for up to 100 track IDs in one request. */
-async function getBatchAudioFeatures(
-  token: string,
-  trackIds: string[],
-): Promise<Map<string, number>> {
-  if (trackIds.length === 0) return new Map();
-
-  const data = await spotifyGet<{ audio_features: Array<AudioFeatureItem | null> }>(
-    token,
-    `/audio-features?ids=${trackIds.join(',')}`,
-  );
-
-  const map = new Map<string, number>();
-  for (const f of data.audio_features) {
-    if (f) map.set(f.id, f.energy);
-  }
-  return map;
+/**
+ * Slice the related-artists list based on crowd energy score.
+ *
+ * - Low  (0.0–0.3): indices 3–8  — less mainstream artists, typically slower
+ * - Med  (0.3–0.6): indices 0–5  — top related artists
+ * - High (0.6–1.0): indices 0–3  — only the most popular related artists
+ */
+function sliceByEnergy(
+  artists: Array<{ id: string }>,
+  energyScore: number,
+): Array<{ id: string }> {
+  if (energyScore < 0.3) return artists.slice(3, 8);
+  if (energyScore < 0.6) return artists.slice(0, 5);
+  return artists.slice(0, 3);
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
 /**
- * Build a recommendation pool without the deprecated /recommendations endpoint:
+ * Build recommendations without any audio-features API calls:
  *
  * 1. Resolve the current track's primary artist.
- * 2. Fetch that artist's top tracks.
- * 3. Fetch 3 related artists and their top tracks.
- * 4. Combine, deduplicate, and filter out the current track.
- * 5. Score each candidate by |candidate.energy − energyScore|.
- * 6. Return the 5 closest matches.
+ * 2. Fetch related artists and slice the list by energyScore.
+ * 3. Fetch top tracks for each selected artist in parallel.
+ * 4. Combine, deduplicate, filter out the current track, return top 5.
  */
 export async function getRecommendations(
   token: string,
   currentTrackId: string,
   energyScore: number,
 ): Promise<RecommendedTrack[]> {
-  // Step 1 – artist for the current track
+  // Step 1
   const artistId = await getArtistId(token, currentTrackId);
 
-  // Steps 2 & 3 – top tracks from seed artist + 3 related artists (parallel)
-  const relatedIds = await getRelatedArtistIds(token, artistId, 3);
+  // Step 2
+  const { artists: relatedArtists } = await spotifyGet<{ artists: Array<{ id: string }> }>(
+    token,
+    `/artists/${artistId}/related-artists`,
+  );
+  const selected = sliceByEnergy(relatedArtists, energyScore);
 
-  const [seedTracks, ...relatedTrackArrays] = await Promise.all([
-    getArtistTopTracks(token, artistId),
-    ...relatedIds.map((id) => getArtistTopTracks(token, id)),
-  ]);
+  // Step 3 – parallel top-track fetches
+  const trackArrays = await Promise.all(
+    selected.map((a) => getArtistTopTracks(token, a.id)),
+  );
 
-  // Step 4 – combine, deduplicate by ID, filter out the current track
+  // Step 4 – combine, deduplicate, filter, return top 5
   const seen = new Set<string>([currentTrackId]);
   const pool: SpotifyTrack[] = [];
 
-  for (const track of [...seedTracks, ...relatedTrackArrays.flat()]) {
+  for (const track of trackArrays.flat()) {
     if (!seen.has(track.id)) {
       seen.add(track.id);
       pool.push(track);
     }
   }
 
-  if (pool.length === 0) return [];
-
-  // Step 5 – batch-fetch audio features and score by energy proximity
-  const featureMap = await getBatchAudioFeatures(
-    token,
-    pool.map((t) => t.id),
-  );
-
-  const scored = pool
-    .filter((t) => featureMap.has(t.id))
-    .map((t) => ({ track: t, diff: Math.abs((featureMap.get(t.id) ?? 0) - energyScore) }))
-    .sort((a, b) => a.diff - b.diff);
-
-  // Step 6 – top 5
-  return scored.slice(0, 5).map(({ track: t }) => ({
+  return pool.slice(0, 5).map((t) => ({
     uri: t.uri,
     name: t.name,
     artist: t.artists.map((a) => a.name).join(', '),
