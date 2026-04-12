@@ -147,7 +147,11 @@ export function useDJBrain({
       const positionSec = position / 1000;
       const pct = duration > 0 ? position / duration : 0;
 
-      console.log(`[useDJBrain] ${positionSec.toFixed(1)}s / ${(duration / 1000).toFixed(1)}s (${(pct * 100).toFixed(1)}%)`);
+      // Fallback: if duration is 0 or unavailable, treat 45s of play as the queue trigger.
+      const durationUnavailable = duration === 0;
+      const fallbackQueueSec    = 45;
+
+      console.log(`[useDJBrain] pos=${positionSec.toFixed(1)}s dur=${(duration / 1000).toFixed(1)}s pct=${(pct * 100).toFixed(1)}% durUnavailable=${durationUnavailable} cooldownRemaining=${Math.max(0, QUEUE_COOLDOWN_MS - (Date.now() - lastQueuedAt.current))}ms`);
 
       if (positionSec < NO_INTERRUPT_SEC) {
         console.log('[useDJBrain] within no-interrupt window, skipping');
@@ -191,11 +195,14 @@ export function useDJBrain({
         }
       }
 
-      // ── Queue the pending track at 85% if cooldown has elapsed ───────────
+      // ── Queue the pending track at 85% (or 45s fallback) if cooldown elapsed
       const cooldownElapsed = Date.now() - lastQueuedAt.current >= QUEUE_COOLDOWN_MS;
+      const atQueueThreshold = durationUnavailable
+        ? positionSec >= fallbackQueueSec
+        : pct >= QUEUE_AT_PCT;
 
       if (
-        pct >= QUEUE_AT_PCT &&
+        atQueueThreshold &&
         !hasQueuedThisTrack.current &&
         cooldownElapsed &&
         pendingTrackRef.current
@@ -217,8 +224,8 @@ export function useDJBrain({
           console.error('[useDJBrain] queue error', err);
           pushLog(`Queue error: ${err instanceof Error ? err.message : String(err)}`);
         }
-      } else if (pct >= QUEUE_AT_PCT) {
-        console.log(`[useDJBrain] at 85% but not queuing — queued=${hasQueuedThisTrack.current} cooldown=${!cooldownElapsed} pending=${!!pendingTrackRef.current}`);
+      } else if (atQueueThreshold) {
+        console.log(`[useDJBrain] at threshold but not queuing — queued=${hasQueuedThisTrack.current} cooldownOk=${cooldownElapsed} pending=${!!pendingTrackRef.current}`);
       }
     };
 
