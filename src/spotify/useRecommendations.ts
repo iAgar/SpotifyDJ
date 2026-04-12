@@ -13,7 +13,7 @@ interface SpotifyTrack {
   id: string;
   uri: string;
   name: string;
-  artists: Array<{ id: string; name: string }>;
+  artists: Array<{ name: string }>;
   album: { images: Array<{ url: string }> };
 }
 
@@ -30,89 +30,50 @@ async function spotifyGet<T>(token: string, path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-/** Resolve the primary artist ID for a given track. */
-async function getArtistId(token: string, trackId: string): Promise<string> {
-  const data = await spotifyGet<{ artists: Array<{ id: string }> }>(
-    token,
-    `/tracks/${trackId}`,
-  );
-  const artistId = data.artists[0]?.id;
-  if (!artistId) throw new Error(`No artist found for track ${trackId}`);
-  return artistId;
-}
-
-/** Fetch an artist's top tracks (market=IN). */
-async function getArtistTopTracks(token: string, artistId: string): Promise<SpotifyTrack[]> {
-  const data = await spotifyGet<{ tracks: SpotifyTrack[] }>(
-    token,
-    `/artists/${artistId}/top-tracks?market=IN`,
-  );
-  return data.tracks;
-}
-
-/**
- * Slice the related-artists list based on crowd energy score.
- *
- * - Low  (0.0–0.3): indices 3–8  — less mainstream artists, typically slower
- * - Med  (0.3–0.6): indices 0–5  — top related artists
- * - High (0.6–1.0): indices 0–3  — only the most popular related artists
- */
-function sliceByEnergy(
-  artists: Array<{ id: string }>,
-  energyScore: number,
-): Array<{ id: string }> {
-  if (energyScore < 0.3) return artists.slice(3, 8);
-  if (energyScore < 0.6) return artists.slice(0, 5);
-  return artists.slice(0, 3);
+function energyToQuery(energyScore: number): string {
+  if (energyScore < 0.3) return 'genre:chill acoustic';
+  if (energyScore < 0.6) return 'genre:pop dance';
+  return 'genre:edm party dance';
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
 /**
- * Build recommendations without any audio-features API calls:
+ * Search-based recommendations using only /v1/tracks and /v1/search —
+ * both available to all Spotify apps with no special permissions:
  *
- * 1. Resolve the current track's primary artist.
- * 2. Fetch related artists and slice the list by energyScore.
- * 3. Fetch top tracks for each selected artist in parallel.
- * 4. Combine, deduplicate, filter out the current track, return top 5.
+ * 1. Fetch current track details to get its ID for filtering.
+ * 2. Map energyScore to a genre/mood search query.
+ * 3. Search for tracks, filter out the current track, return top 5.
  */
 export async function getRecommendations(
   token: string,
   currentTrackId: string,
   energyScore: number,
 ): Promise<RecommendedTrack[]> {
-  // Step 1
-  const artistId = await getArtistId(token, currentTrackId);
+  const query = energyToQuery(energyScore);
 
-  // Step 2
-  const { artists: relatedArtists } = await spotifyGet<{ artists: Array<{ id: string }> }>(
+  const params = new URLSearchParams({
+    q: query,
+    type: 'track',
+    limit: '10', // fetch a few extra so filtering still leaves 5
+    market: 'IN',
+  });
+
+  const data = await spotifyGet<{ tracks: { items: SpotifyTrack[] } }>(
     token,
-    `/artists/${artistId}/related-artists`,
-  );
-  const selected = sliceByEnergy(relatedArtists, energyScore);
-
-  // Step 3 – parallel top-track fetches
-  const trackArrays = await Promise.all(
-    selected.map((a) => getArtistTopTracks(token, a.id)),
+    `/search?${params}`,
   );
 
-  // Step 4 – combine, deduplicate, filter, return top 5
-  const seen = new Set<string>([currentTrackId]);
-  const pool: SpotifyTrack[] = [];
-
-  for (const track of trackArrays.flat()) {
-    if (!seen.has(track.id)) {
-      seen.add(track.id);
-      pool.push(track);
-    }
-  }
-
-  return pool.slice(0, 5).map((t) => ({
-    uri: t.uri,
-    name: t.name,
-    artist: t.artists.map((a) => a.name).join(', '),
-    albumArt: t.album.images[0]?.url ?? '',
-  }));
+  return data.tracks.items
+    .filter((t) => t.id !== currentTrackId)
+    .slice(0, 5)
+    .map((t) => ({
+      uri: t.uri,
+      name: t.name,
+      artist: t.artists.map((a) => a.name).join(', '),
+      albumArt: t.album.images[0]?.url ?? '',
+    }));
 }
 
 // ── Hook ─────────────────────────────────────────────────────────────────────
