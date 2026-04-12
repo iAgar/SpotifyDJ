@@ -2,21 +2,59 @@ import { useAuth } from './auth/useAuth';
 import { usePlayer } from './spotify/usePlayer';
 import { useMotionDetector } from './camera/useMotionDetector';
 import { useDJBrain } from './dj/useDJBrain';
+import { NowPlaying } from './components/NowPlaying';
+import { EnergyMeter } from './components/EnergyMeter';
+import { DJLog } from './components/DJLog';
+import { NextUp } from './components/NextUp';
+import { CameraPreview } from './components/CameraPreview';
 
-function energyLabel(score: number): string {
-  if (score < 0.3) return 'chill';
-  if (score < 0.6) return 'warming up';
-  return 'peak energy';
+// ── Login screen ──────────────────────────────────────────────────────────────
+
+function LoginScreen({ onLogin }: { onLogin: () => void }) {
+  return (
+    <div style={{
+      minHeight: '100vh',
+      background: '#0a0a0a',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: '2rem',
+      fontFamily: "'Inter', 'Helvetica Neue', sans-serif",
+    }}>
+      <div style={{ textAlign: 'center' }}>
+        <div style={{ fontSize: 48, fontWeight: 800, color: '#fff', letterSpacing: '-1px' }}>
+          PARTY<span style={{ color: '#1db954' }}>DJ</span>
+        </div>
+        <div style={{ fontSize: 14, color: '#555', marginTop: '0.5rem', letterSpacing: '0.1em' }}>
+          AI-POWERED CROWD ENERGY
+        </div>
+      </div>
+
+      <button
+        onClick={onLogin}
+        style={{
+          background: '#1db954',
+          color: '#000',
+          border: 'none',
+          borderRadius: 50,
+          padding: '1rem 3rem',
+          fontSize: 16,
+          fontWeight: 700,
+          cursor: 'pointer',
+          letterSpacing: '0.08em',
+        }}
+      >
+        LOGIN WITH SPOTIFY
+      </button>
+    </div>
+  );
 }
 
-function energyColor(score: number): string {
-  if (score < 0.3) return '#4ade80';
-  if (score < 0.6) return '#facc15';
-  return '#f87171';
-}
+// ── Main app ──────────────────────────────────────────────────────────────────
 
 function App() {
-  const { token, login } = useAuth();
+  const { token, login }   = useAuth();
   const { deviceId, currentTrack, isReady, player } = usePlayer(token);
   const { energyScore, isActive, videoRef, startCamera, stopCamera } = useMotionDetector();
   const { recommendedNext, djLog, playNext } = useDJBrain({
@@ -27,129 +65,85 @@ function App() {
     currentTrack,
   });
 
-  if (!token) {
-    return (
-      <div style={{ padding: '2rem' }}>
-        <button onClick={login}>Login with Spotify</button>
-      </div>
-    );
-  }
-
-  const pct   = Math.round(energyScore * 100);
-  const color = energyColor(energyScore);
-  const label = energyLabel(energyScore);
+  if (!token) return <LoginScreen onLogin={login} />;
 
   return (
-    <div style={{ padding: '1rem', fontFamily: 'sans-serif', maxWidth: 480 }}>
-      <p>Authenticated</p>
+    <div style={{
+      minHeight: '100vh',
+      background: '#0a0a0a',
+      color: '#fff',
+      fontFamily: "'Inter', 'Helvetica Neue', sans-serif",
+      display: 'grid',
+      gridTemplateRows: '1fr auto',
+      overflow: 'hidden',
+    }}>
+      {/* ── Main content area ── */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: '60px 1fr 200px',
+        gap: '1.5rem',
+        padding: '2rem',
+        alignItems: 'center',
+        minHeight: 0,
+      }}>
 
-      <p>Player status: {isReady ? 'Ready' : 'Not ready'}</p>
-
-      {currentTrack ? (
-        <p>Now playing: {currentTrack.name} — {currentTrack.artist}</p>
-      ) : (
-        <p>No track playing</p>
-      )}
-
-      {deviceId && (
-        <p style={{ fontSize: '0.75rem', color: '#888' }}>Device ID: {deviceId}</p>
-      )}
-
-      {/* Energy meter */}
-      <div style={{ marginTop: '1.5rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
-          <strong>Crowd energy</strong>
-          <span style={{ color, fontWeight: 600 }}>{label}</span>
-          <span style={{ marginLeft: 'auto', fontSize: '0.85rem', color: '#555' }}>{pct}%</span>
+        {/* Left: Energy meter */}
+        <div style={{ height: 400, display: 'flex', alignItems: 'stretch' }}>
+          <EnergyMeter energyScore={energyScore} />
         </div>
 
-        <div style={{ height: 12, borderRadius: 6, background: '#e5e7eb', overflow: 'hidden' }}>
-          <div
-            style={{
-              height: '100%',
-              width: `${pct}%`,
-              background: color,
-              borderRadius: 6,
-              transition: 'width 0.4s ease, background 0.4s ease',
-            }}
+        {/* Centre: Now playing */}
+        <div style={{ display: 'flex', justifyContent: 'center' }}>
+          <NowPlaying track={currentTrack} isReady={isReady} />
+        </div>
+
+        {/* Right: DJ Log */}
+        <DJLog entries={djLog} />
+      </div>
+
+      {/* ── Bottom bar ── */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '1rem 2rem 1.5rem',
+        borderTop: '1px solid #111',
+        gap: '1.5rem',
+      }}>
+
+        {/* Bottom-left: Next Up */}
+        <div style={{ flex: 1, maxWidth: 320 }}>
+          <NextUp track={recommendedNext} onPlayNext={playNext} />
+        </div>
+
+        {/* Centre: START / STOP button */}
+        <button
+          onClick={isActive ? stopCamera : startCamera}
+          style={{
+            background: isActive ? '#1a1a1a' : '#1db954',
+            color: isActive ? '#f87171' : '#000',
+            border: isActive ? '1px solid #f87171' : 'none',
+            borderRadius: 50,
+            padding: '0.85rem 2.5rem',
+            fontSize: 15,
+            fontWeight: 800,
+            cursor: 'pointer',
+            letterSpacing: '0.1em',
+            transition: 'all 0.2s ease',
+            flexShrink: 0,
+          }}
+        >
+          {isActive ? 'STOP PARTY' : 'START PARTY'}
+        </button>
+
+        {/* Bottom-right: Camera preview */}
+        <div style={{ flex: 1, maxWidth: 320, display: 'flex', justifyContent: 'flex-end' }}>
+          <CameraPreview
+            videoRef={videoRef}
+            isActive={isActive}
+            energyScore={energyScore}
           />
         </div>
-
-        <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
-          {!isActive ? (
-            <button onClick={startCamera}>Start camera</button>
-          ) : (
-            <button onClick={stopCamera}>Stop camera</button>
-          )}
-        </div>
-      </div>
-
-      {/* Next Up */}
-      <div style={{ marginTop: '1.5rem' }}>
-        <strong>Next Up</strong>
-
-        {recommendedNext ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginTop: '0.5rem' }}>
-            {recommendedNext.albumArt && (
-              <img
-                src={recommendedNext.albumArt}
-                alt={recommendedNext.name}
-                width={40}
-                height={40}
-                style={{ borderRadius: 4, flexShrink: 0 }}
-              />
-            )}
-            <span style={{ fontSize: '0.85rem', flex: 1 }}>
-              <strong>{recommendedNext.name}</strong> — {recommendedNext.artist}
-            </span>
-            <button onClick={playNext} style={{ flexShrink: 0 }}>
-              Next Song
-            </button>
-          </div>
-        ) : (
-          <p style={{ fontSize: '0.85rem', color: '#888', marginTop: '0.4rem' }}>
-            {currentTrack ? 'Fetching recommendation…' : 'Play a track to get recommendations.'}
-          </p>
-        )}
-      </div>
-
-      {/* DJ Log */}
-      {djLog.length > 0 && (
-        <div style={{ marginTop: '1.5rem' }}>
-          <strong>DJ Log</strong>
-          <ul style={{ listStyle: 'none', padding: 0, margin: '0.4rem 0 0', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-            {djLog.map((entry, i) => (
-              <li key={i} style={{ fontSize: '0.75rem', color: '#555', fontFamily: 'monospace' }}>
-                {entry}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Webcam preview — bottom-right corner */}
-      <div
-        style={{
-          position: 'fixed',
-          bottom: '1rem',
-          right: '1rem',
-          width: 160,
-          height: 120,
-          borderRadius: 8,
-          overflow: 'hidden',
-          border: '2px solid #374151',
-          background: '#111',
-          display: isActive ? 'block' : 'none',
-        }}
-      >
-        <video
-          ref={videoRef}
-          width={160}
-          height={120}
-          muted
-          playsInline
-          style={{ display: 'block', transform: 'scaleX(-1)' }}
-        />
       </div>
     </div>
   );

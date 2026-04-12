@@ -4,6 +4,7 @@ export interface CurrentTrack {
   id: string | null;
   name: string;
   artist: string;
+  albumArt: string;
 }
 
 export interface UsePlayerResult {
@@ -70,6 +71,7 @@ export function usePlayer(token: string | null): UsePlayerResult {
           id: track.id,
           name: track.name,
           artist: track.artists.map((a) => a.name).join(', '),
+          albumArt: track.album.images[0]?.url ?? '',
         });
       });
 
