@@ -96,7 +96,7 @@ export function NextUp({ track, onPlayNext }: Props) {
           color: '#333',
           fontStyle: 'italic',
         }}>
-          Analysing energy…
+          Finding next track…
         </div>
       )}
     </div>

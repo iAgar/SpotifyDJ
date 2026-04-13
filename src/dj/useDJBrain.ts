@@ -3,7 +3,7 @@ import { getRecommendations, AuthError, type RecommendedTrack } from '../spotify
 import type { CurrentTrack } from '../spotify/usePlayer';
 
 const FETCH_INTERVAL_MS   = 15_000;
-const AUTO_PLAY_THRESHOLD = 0.9;   // 90% of track duration
+const AUTO_PLAY_THRESHOLD = 0.85;  // 85% of track duration — fires before Spotify advances its own queue
 const COOLDOWN_MS         = 45_000; // minimum gap between track switches
 
 export interface DJBrainInput {
@@ -108,7 +108,10 @@ export function useDJBrain({
       if (duration > 0 && position / duration > AUTO_PLAY_THRESHOLD && !hasPlayedRef.current) {
         const sinceLastPlay = Date.now() - lastPlayedAtRef.current;
         if (sinceLastPlay < COOLDOWN_MS) return;
-        playRecommended();
+        // Set the guard immediately — before the async fetch — so rapid state_changed
+        // events from the SDK cannot trigger a second call while the first is in flight.
+        hasPlayedRef.current = true;
+        void playUri(recommendedNextRef.current.uri, recommendedNextRef.current.name);
       }
     };
 
@@ -158,26 +161,11 @@ export function useDJBrain({
     }
   }
 
-  async function playRecommended(): Promise<void> {
-    const rec = recommendedNextRef.current;
-    if (!rec || hasPlayedRef.current) return;
-    hasPlayedRef.current = true;
-    await playUri(rec.uri, rec.name);
-  }
-
   async function playNext(): Promise<void> {
-    const rec = recommendedNextRef.current;
-    if (!rec) return;
-
-    const sinceLastPlay = Date.now() - lastPlayedAtRef.current;
-    if (sinceLastPlay < COOLDOWN_MS) {
-      const remaining = Math.round((COOLDOWN_MS - sinceLastPlay) / 1000);
-      addLog(`Cooldown — wait ${remaining}s before skipping again`);
-      return;
-    }
-
+    console.log('[DJBrain] playNext called, rec:', recommendedNextRef.current?.name ?? 'none');
+    if (!recommendedNextRef.current) return;
     hasPlayedRef.current = true;
-    await playUri(rec.uri, rec.name);
+    await playUri(recommendedNextRef.current.uri, recommendedNextRef.current.name);
   }
 
   return { recommendedNext, djLog, playNext };
