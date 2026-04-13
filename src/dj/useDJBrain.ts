@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { getRecommendations, AuthError, type RecommendedTrack } from '../spotify/useRecommendations';
 import type { CurrentTrack } from '../spotify/usePlayer';
 
-const FETCH_INTERVAL_MS  = 15_000;
+const FETCH_INTERVAL_MS   = 15_000;
 const AUTO_PLAY_THRESHOLD = 0.9;   // 90% of track duration
-const COOLDOWN_MS        = 45_000; // minimum gap between track switches
+const COOLDOWN_MS         = 45_000; // minimum gap between track switches
 
 export interface DJBrainInput {
   token: string | null;
@@ -39,10 +39,9 @@ export function useDJBrain({
   const hasPlayedRef       = useRef(false);
   const energyRef          = useRef(energyScore);
   const recommendedNextRef = useRef<RecommendedTrack | null>(null);
-  const lastPlayedAtRef    = useRef<number>(0);        // timestamp of last track switch
-  const rateLimitedRef     = useRef<boolean>(false);   // true while in 429 backoff
+  const lastPlayedAtRef    = useRef<number>(0);
+  const rateLimitedRef     = useRef<boolean>(false);
 
-  // Keep refs in sync with latest render values
   useEffect(() => { energyRef.current = energyScore; }, [energyScore]);
   useEffect(() => { recommendedNextRef.current = recommendedNext; }, [recommendedNext]);
 
@@ -50,7 +49,6 @@ export function useDJBrain({
   useEffect(() => {
     if (!currentTrack) return;
     hasPlayedRef.current = false;
-    console.log('[DJBrain] Track changed, reset play guard');
   }, [currentTrack?.id]);
 
   function addLog(msg: string) {
@@ -61,13 +59,8 @@ export function useDJBrain({
   useEffect(() => {
     if (!token || !currentTrack) return;
 
-    console.log('[DJBrain] Starting recommendation loop for:', currentTrack.name);
-
     const interval = setInterval(async () => {
-      if (rateLimitedRef.current) {
-        console.log('[DJBrain] Skipping fetch — rate limited');
-        return;
-      }
+      if (rateLimitedRef.current) return;
 
       try {
         const results = await getRecommendations(
@@ -84,7 +77,6 @@ export function useDJBrain({
         }
       } catch (err) {
         if (err instanceof AuthError) {
-          console.error('[DJBrain] Auth error — logging out');
           addLog('Session expired — please log in again');
           onAuthError?.();
           return;
@@ -95,10 +87,7 @@ export function useDJBrain({
         if (msg.includes('Rate limited')) {
           rateLimitedRef.current = true;
           addLog('Rate limited — pausing 30s');
-          setTimeout(() => {
-            rateLimitedRef.current = false;
-            console.log('[DJBrain] Rate limit backoff complete');
-          }, 30_000);
+          setTimeout(() => { rateLimitedRef.current = false; }, 30_000);
           return;
         }
 
@@ -118,11 +107,7 @@ export function useDJBrain({
       const { position, duration } = state;
       if (duration > 0 && position / duration > AUTO_PLAY_THRESHOLD && !hasPlayedRef.current) {
         const sinceLastPlay = Date.now() - lastPlayedAtRef.current;
-        if (sinceLastPlay < COOLDOWN_MS) {
-          console.log(`[DJBrain] Cooldown active — ${Math.round((COOLDOWN_MS - sinceLastPlay) / 1000)}s remaining`);
-          return;
-        }
-        console.log('[DJBrain] 90% reached, auto-playing next');
+        if (sinceLastPlay < COOLDOWN_MS) return;
         playRecommended();
       }
     };

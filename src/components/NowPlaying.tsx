@@ -8,7 +8,6 @@ interface Props {
 const BAR_COUNT = 5;
 
 export function NowPlaying({ trackName, artistName, albumArt, isReady }: Props) {
-  console.log('[NowPlaying] albumArt:', albumArt, '| trackName:', trackName);
   return (
     <div style={{
       display: 'flex',

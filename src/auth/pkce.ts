@@ -1,4 +1,4 @@
-const CLIENT_ID = 'fe5b86ebb20f450f82719e1f32927b61';
+const CLIENT_ID = import.meta.env.VITE_SPOTIFY_CLIENT_ID as string;
 const REDIRECT_URI = 'http://127.0.0.1:3000';
 const SCOPES = [
   'streaming',

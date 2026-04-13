@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { useAuth } from './auth/useAuth';
 import { usePlayer } from './spotify/usePlayer';
 import { useMotionDetector } from './camera/useMotionDetector';
@@ -172,25 +172,6 @@ function App() {
     },
   });
 
-  // ── Diagnostic log every 10 s ────────────────────────────────────────────
-  const diagRef = useRef({ token, deviceId, currentTrack, isReady, energyScore, recommendedNext });
-  useEffect(() => {
-    diagRef.current = { token, deviceId, currentTrack, isReady, energyScore, recommendedNext };
-  });
-  useEffect(() => {
-    const id = setInterval(() => {
-      const d = diagRef.current;
-      console.log('[App diagnostic]', {
-        token: d.token ? `${d.token.slice(0, 10)}…` : null,
-        deviceId: d.deviceId,
-        isReady: d.isReady,
-        currentTrack: d.currentTrack,
-        energyScore: d.energyScore,
-        recommendedNext: d.recommendedNext?.name ?? null,
-      });
-    }, 10_000);
-    return () => clearInterval(id);
-  }, []);
 
   // ── Render guards ─────────────────────────────────────────────────────────
 

@@ -38,7 +38,6 @@ async function spotifyGet<T>(token: string, path: string): Promise<T> {
   if (res.status === 429) {
     const retryAfter = Number(res.headers.get('Retry-After') ?? 30);
     rateLimitedUntil = Date.now() + retryAfter * 1000;
-    console.warn(`[Spotify] Rate limited. Backing off ${retryAfter}s`);
     throw new Error(`Rate limited — retry in ${retryAfter}s`);
   }
 
@@ -138,7 +137,6 @@ export async function getRecommendations(
 
   // Fallback: top tracks from the current artist
   if (currentArtistId) {
-    console.log('[Recommendations] Search returned < 2 results, falling back to artist top-tracks');
     const fallback = await relatedArtistTracks(token, currentTrackId, currentArtistId);
     if (fallback.length > 0) return fallback;
   }

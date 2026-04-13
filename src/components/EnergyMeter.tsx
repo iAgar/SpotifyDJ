@@ -15,7 +15,6 @@ function color(score: number): string {
 }
 
 export function EnergyMeter({ energyScore }: Props) {
-  console.log('[EnergyMeter] energyScore:', energyScore);
   const pct = Math.round(energyScore * 100);
   const c   = color(energyScore);
   const lbl = label(energyScore);

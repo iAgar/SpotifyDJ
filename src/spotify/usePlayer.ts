@@ -61,12 +61,10 @@ export function usePlayer(token: string | null, onAuthError?: () => void): UsePl
         setDeviceId(device_id);
         setIsReady(true);
         setIsReconnecting(false);
-        console.log('[Player] Ready, device_id:', device_id);
       });
 
-      player.addListener('not_ready', ({ device_id }) => {
+      player.addListener('not_ready', (_) => {
         if (cancelled) return;
-        console.warn('[Player] Device went offline:', device_id);
         setIsReady(false);
         setIsReconnecting(true);
       });
