@@ -56,7 +56,8 @@ async function spotifyGet<T>(token: string, path: string): Promise<T> {
 function energyToQuery(energyScore: number): string {
   if (energyScore < 0.3) return 'genre:chill acoustic';
   if (energyScore < 0.6) return 'genre:pop dance';
-  return 'genre:edm party dance';
+  if(energyScore < 0.99) return 'genre:party dance';
+  return 'genre:party dance';
 }
 
 // ── Search-based recommendations ─────────────────────────────────────────────
